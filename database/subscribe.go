@@ -187,6 +187,11 @@ func flushBatch(roomId int64) {
 	delete(pushBatches, roomId)
 	batchMutex.Unlock()
 
+	room := GetRoom(roomId)
+	if room == nil || !room.NotifyEnabled {
+		return
+	}
+
 	eventsByType := make(map[string][]string)
 	for _, event := range batch.Events {
 		eventsByType[event.Type] = append(eventsByType[event.Type], event.Content)

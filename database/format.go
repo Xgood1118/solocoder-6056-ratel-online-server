@@ -26,13 +26,13 @@ func CardKeyToInline(key int) string {
 	case 9:
 		return "9"
 	case 10:
-		return "j"
+		return "10"
 	case 11:
-		return "q"
+		return "j"
 	case 12:
-		return "k"
+		return "q"
 	case 13:
-		return "a"
+		return "k"
 	case 14:
 		return "s"
 	case 15:

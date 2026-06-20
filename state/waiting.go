@@ -365,7 +365,7 @@ func playReplay(player *database.Player, replay *database.ReplayRecord) error {
 
 		switch ev.Type {
 		case database.ReplayEventPlay:
-			if len(ev.Data) >= 2 && ev.Data[0] >= 1 && ev.Data[0] <= 5 {
+			if replay.GameType == consts.GameTypeTexas && len(ev.Data) >= 1 && ev.Data[0] >= 1 && ev.Data[0] <= 5 {
 				action := ""
 				amount := 0
 				if len(ev.Data) >= 2 {

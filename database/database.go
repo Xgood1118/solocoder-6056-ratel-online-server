@@ -73,7 +73,6 @@ var roomPropsSetter = map[string]func(r *Room, v string){
 	},
 	consts.RoomPropsNotify: func(r *Room, v string) {
 		r.NotifyEnabled = v == "on"
-		SetRoomNotify(r.ID, v == "on")
 	},
 }
 

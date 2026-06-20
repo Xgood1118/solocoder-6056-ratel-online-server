@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 type ReplayEventType string
@@ -136,8 +137,9 @@ func AddReplayComment(replayId int64, playerId int64, content string) {
 		return
 	}
 
-	if len(content) > 20 {
-		content = content[:20]
+	if utf8.RuneCountInString(content) > 20 {
+		runes := []rune(content)
+		content = string(runes[:20])
 	}
 
 	record.Comments = append(record.Comments, ReplayComment{
