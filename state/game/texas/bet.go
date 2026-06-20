@@ -70,6 +70,7 @@ func bet(player *database.Player, game *database.Texas) error {
 				continue
 			}
 			game.Bet(texasPlayer, minCall)
+			addTexasReplayEvent(game, player.ID, database.ReplayEventPlay, []int{1, int(minCall)})
 			database.Broadcast(player.RoomID, fmt.Sprintf("%s call, bet %d\n", player.Name, minCall))
 		case "raise":
 			if len(instructions) <= 1 || instructions[1] == "" {
@@ -90,10 +91,12 @@ func bet(player *database.Player, game *database.Texas) error {
 				continue
 			}
 			game.Bet(texasPlayer, betAmount)
+			addTexasReplayEvent(game, player.ID, database.ReplayEventPlay, []int{2, int(betAmount)})
 			database.Broadcast(player.RoomID, fmt.Sprintf("%s raise, bet %d\n", player.Name, betAmount))
 		case "fold":
 			texasPlayer.Folded = true
 			game.Folded++
+			addTexasReplayEvent(game, player.ID, database.ReplayEventPlay, []int{3})
 			database.Broadcast(player.RoomID, fmt.Sprintf("%s fold\n", player.Name))
 			if game.Folded == len(game.Players)-1 {
 				return settlementRound(game)
@@ -104,13 +107,16 @@ func bet(player *database.Player, game *database.Texas) error {
 				continue
 			}
 			game.Bet(texasPlayer, 0)
+			addTexasReplayEvent(game, player.ID, database.ReplayEventPlay, []int{4})
 			database.Broadcast(player.RoomID, fmt.Sprintf("%s check\n", player.Name))
 		case "allin":
 			betAmount := texasPlayer.Amount()
 			game.Bet(texasPlayer, betAmount)
+			addTexasReplayEvent(game, player.ID, database.ReplayEventPlay, []int{5, int(betAmount)})
 			database.Broadcast(player.RoomID, fmt.Sprintf("%s all in, bet %d\n", player.Name, betAmount))
 		default:
 			database.BroadcastChat(player, fmt.Sprintf("%s [%s] say: %s\n", player.Name, player.Role, ans))
+			addTexasReplayEvent(game, player.ID, database.ReplayEventChat, []int{})
 			continue
 		}
 		break

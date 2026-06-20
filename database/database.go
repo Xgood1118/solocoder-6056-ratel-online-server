@@ -71,6 +71,10 @@ var roomPropsSetter = map[string]func(r *Room, v string){
 	consts.RoomPropsBlankWordMode: func(r *Room, v string) {
 		r.BlankWordMode = v == "on"
 	},
+	consts.RoomPropsNotify: func(r *Room, v string) {
+		r.NotifyEnabled = v == "on"
+		SetRoomNotify(r.ID, v == "on")
+	},
 }
 
 func init() {
@@ -206,6 +210,7 @@ func getAllowedPropsByGameType(gameType int) map[string]bool {
 			consts.RoomPropsJokerAsTarget: true,
 			consts.RoomPropsShowIP:        true,
 			consts.RoomPropsPassword:      true,
+			consts.RoomPropsNotify:        true,
 		}
 	case consts.GameTypeUndercover:
 		// 对于谁是卧底，允许设置玩家数量、卧底数量、空白词模式和显示IP
@@ -215,6 +220,7 @@ func getAllowedPropsByGameType(gameType int) map[string]bool {
 			consts.RoomPropsBlankWordMode: true,
 			consts.RoomPropsShowIP:        true,
 			consts.RoomPropsPassword:      true,
+			consts.RoomPropsNotify:        true,
 		}
 	case consts.GameTypeUno, consts.GameTypeMahjong:
 		// 对于Uno和麻将，允许设置玩家数量和显示IP
@@ -222,6 +228,7 @@ func getAllowedPropsByGameType(gameType int) map[string]bool {
 			consts.RoomPropsPlayerNum: true,
 			consts.RoomPropsShowIP:    true,
 			consts.RoomPropsPassword:  true,
+			consts.RoomPropsNotify:    true,
 		}
 	case consts.GameTypeTexas:
 		// 对于德州扑克，允许设置玩家数量和显示IP
@@ -229,6 +236,7 @@ func getAllowedPropsByGameType(gameType int) map[string]bool {
 			consts.RoomPropsPlayerNum: true,
 			consts.RoomPropsShowIP:    true,
 			consts.RoomPropsPassword:  true,
+			consts.RoomPropsNotify:    true,
 		}
 	default:
 		// 其他游戏类型允许所有常规属性
@@ -240,6 +248,7 @@ func getAllowedPropsByGameType(gameType int) map[string]bool {
 			consts.RoomPropsPlayerNum:  true,
 			consts.RoomPropsChat:       true,
 			consts.RoomPropsShowIP:     true,
+			consts.RoomPropsNotify:     true,
 		}
 	}
 }

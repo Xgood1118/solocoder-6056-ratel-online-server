@@ -51,9 +51,35 @@ func GameTypeOptions(player *database.Player) error {
 
 func RoomList(player *database.Player) error {
 	buf := bytes.Buffer{}
-	buf.WriteString(fmt.Sprintf("%-10s%-10s%-10s%-10s\n", "ID", "Type", "Players", "State"))
+	buf.WriteString(fmt.Sprintf("%-10s%-12s%-10s%-10s%-10s\n", "ID", "Type", "Players", "State", "Likes"))
 	for _, room := range database.GetRooms() {
-		buf.WriteString(fmt.Sprintf("%-10d%-10s%-10d%-10s\n", room.ID, consts.GameTypes[room.Type], room.Players, consts.RoomStates[room.State]))
+		replays := database.GetRoomReplays(room.ID, 10)
+		totalLikes := 0
+		for _, r := range replays {
+			totalLikes += r.Likes
+		}
+		buf.WriteString(fmt.Sprintf("%-10d%-12s%-10d%-10s%-10d\n", room.ID, consts.GameTypes[room.Type], room.Players, consts.RoomStates[room.State], totalLikes))
+
+		if len(replays) > 0 {
+			commentCount := 0
+			for _, r := range replays {
+				for _, c := range r.Comments {
+					if commentCount >= 2 {
+						break
+					}
+					commenter := database.GetPlayer(c.PlayerID)
+					name := "匿名"
+					if commenter != nil {
+						name = commenter.Name
+					}
+					buf.WriteString(fmt.Sprintf("  %s: %s\n", name, c.Content))
+					commentCount++
+				}
+				if commentCount >= 2 {
+					break
+				}
+			}
+		}
 	}
 	modelRooms := make([]model.Room, 0)
 	for _, room := range database.GetRooms() {

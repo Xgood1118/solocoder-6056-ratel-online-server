@@ -3,6 +3,9 @@ package texas
 import (
 	"bytes"
 	"fmt"
+	"strings"
+	"time"
+
 	"github.com/ratel-online/core/model"
 	"github.com/ratel-online/core/util/poker"
 	"github.com/ratel-online/server/bot"
@@ -73,6 +76,10 @@ func flopRound(game *database.Texas) error {
 	game.MaxBetPlayer = nil
 	game.Board = append(game.Board, game.Pool[1:4]...)
 	game.Pool = game.Pool[4:]
+	for _, c := range game.Board {
+		game.ReplayCtx.BoardCards = append(game.ReplayCtx.BoardCards, c.Key)
+	}
+	addTexasReplayEvent(game, 0, database.ReplayEventMultiple, []int{1})
 	database.Broadcast(game.Room.ID, fmt.Sprintf("Flop round, board: %s\n", game.Board.TexasString()))
 	game.SBPlayer().State <- stateBet
 	return nil
@@ -83,6 +90,10 @@ func turnRound(game *database.Texas) error {
 	game.MaxBetPlayer = nil
 	game.Board = append(game.Board, game.Pool[1:2]...)
 	game.Pool = game.Pool[2:]
+	for _, c := range game.Board[len(game.Board)-1:] {
+		game.ReplayCtx.BoardCards = append(game.ReplayCtx.BoardCards, c.Key)
+	}
+	addTexasReplayEvent(game, 0, database.ReplayEventMultiple, []int{2})
 	database.Broadcast(game.Room.ID, fmt.Sprintf("Turn round, board: %s\n", game.Board.TexasString()))
 	game.SBPlayer().State <- stateBet
 	return nil
@@ -93,6 +104,10 @@ func riverRound(game *database.Texas) error {
 	game.MaxBetPlayer = nil
 	game.Board = append(game.Board, game.Pool[1:2]...)
 	game.Pool = game.Pool[2:]
+	for _, c := range game.Board[len(game.Board)-1:] {
+		game.ReplayCtx.BoardCards = append(game.ReplayCtx.BoardCards, c.Key)
+	}
+	addTexasReplayEvent(game, 0, database.ReplayEventMultiple, []int{3})
 	database.Broadcast(game.Room.ID, fmt.Sprintf("River round, board: %s\n", game.Board.TexasString()))
 	game.SBPlayer().State <- stateBet
 	return nil
@@ -102,6 +117,13 @@ func settlementRound(game *database.Texas) error {
 	buf := bytes.Buffer{}
 	buf.WriteString("Settlement round\n")
 	buf.WriteString(fmt.Sprintf("Board: %s\n", game.Board.TexasString()))
+
+	var maxFaces *model.TexasFaces
+	var maxPlayers []int64
+	var winnerIds []int64
+	var maxHandKeys []int
+	var maxHandType string
+	var chipsWonPerPlayer map[int64]int = map[int64]int{}
 
 	if game.Folded == len(game.Players)-1 {
 		var winner *database.TexasPlayer
@@ -113,14 +135,14 @@ func settlementRound(game *database.Texas) error {
 		}
 		if winner != nil {
 			winner.Add(game.Pot)
+			winnerIds = []int64{winner.ID}
+			chipsWonPerPlayer[winner.ID] = int(game.Pot)
 			buf.WriteString(fmt.Sprintf("Winner: %s, got all pot: %d\n", winner.Name, game.Pot))
 		} else {
 			buf.WriteString("All players folded\n")
 		}
 	} else {
 		buf.WriteString("Players' hands:\n")
-		var maxFaces *model.TexasFaces
-		var maxPlayers []int64
 		for _, player := range game.Players {
 			if player.Folded {
 				continue
@@ -135,6 +157,12 @@ func settlementRound(game *database.Texas) error {
 				(maxFaces.Type == faces.Type && maxFaces.Score < faces.Score) {
 				maxFaces = faces
 				maxPlayers = []int64{player.ID}
+				maxHandType = faces.Type
+				handKeys := make([]int, len(player.Hand))
+				for i, c := range player.Hand {
+					handKeys[i] = c.Key
+				}
+				maxHandKeys = handKeys
 				continue
 			}
 			if maxFaces.Type == faces.Type && maxFaces.Score == faces.Score {
@@ -144,6 +172,12 @@ func settlementRound(game *database.Texas) error {
 		winners := make([]*database.TexasPlayer, 0)
 		for _, id := range maxPlayers {
 			winners = append(winners, game.Player(id))
+		}
+		winnerIds = maxPlayers
+		eachWin := int(game.Pot) / len(winners)
+		for _, winner := range winners {
+			winner.Add(uint(eachWin))
+			chipsWonPerPlayer[winner.ID] = eachWin
 		}
 		if len(winners) == 1 {
 			buf.WriteString(fmt.Sprintf("Winner: %s, got all pot: %d\n", winners[0].Name, game.Pot))
@@ -157,12 +191,58 @@ func settlementRound(game *database.Texas) error {
 			}
 			buf.WriteString(fmt.Sprintf(", half all pot: %d\n", game.Pot))
 		}
-		for _, winner := range winners {
-			winner.Add(game.Pot / uint(len(winners)))
-		}
 	}
 	buf.WriteString(fmt.Sprintf("Please room owner %s to start a new game\n", database.GetPlayer(game.Room.Creator).Name))
 	database.Broadcast(game.Room.ID, buf.String())
+
+	game.ReplayCtx.EndTime = time.Now()
+	game.ReplayCtx.Winners = winnerIds
+	game.ReplayCtx.MaxMultiple = int(game.Pot)
+
+	for _, pid := range game.ReplayCtx.PlayerHands {
+		_ = pid
+	}
+	for _, tp := range game.Players {
+		won := false
+		for _, wid := range winnerIds {
+			if tp.ID == wid {
+				won = true
+				break
+			}
+		}
+		database.UpdateProfileStats(tp.ID, won, game.ReplayCtx.MaxMultiple, false)
+
+		chipsWon := chipsWonPerPlayer[tp.ID]
+		ctx := map[string]interface{}{
+			"won":       won,
+			"isTexas":   true,
+			"chipsWon":  chipsWon,
+			"handType":  maxHandType,
+			"handCards": len(tp.Hand),
+		}
+
+		profile := database.GetProfile(tp.ID)
+		newBadges := database.CheckAchievements(profile, ctx)
+		for _, badge := range newBadges {
+			database.Broadcast(game.Room.ID, fmt.Sprintf("🎉 %s 解锁成就【%s】- %s\n", database.GetPlayer(tp.ID).Name, badge.Name, badge.Description))
+		}
+	}
+
+	_ = database.SaveReplay(game.ReplayCtx)
+
+	if game.Room.NotifyEnabled {
+		winnerNames := make([]string, 0)
+		for _, wid := range winnerIds {
+			winnerNames = append(winnerNames, database.GetPlayer(wid).Name)
+		}
+		resultContent := fmt.Sprintf("房间 %d - 胜者: %s, 奖池: %d", game.Room.ID, strings.Join(winnerNames, ","), game.Pot)
+		database.PushEvent(game.Room.ID, "result", resultContent)
+
+		if len(maxHandKeys) > 0 {
+			handContent := fmt.Sprintf("最大牌型 [%s]: %s", maxHandType, database.PokerKeysToInline(maxHandKeys))
+			database.PushEvent(game.Room.ID, "max_hand", handContent)
+		}
+	}
 
 	room := game.Room
 	room.State = consts.RoomStateWaiting

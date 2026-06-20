@@ -251,6 +251,7 @@ type Room struct {
 	EnableJokerAsTarget bool      `json:"enableJokerAsTarget"`
 	UndercoverNum       int       `json:"undercoverNum"`  // 卧底数量
 	BlankWordMode       bool      `json:"blankWordMode"`  // 空白词模式
+	NotifyEnabled       bool      `json:"notifyEnabled"`  // 群通知开关
 }
 
 func (r *Room) Model() model.Room {
@@ -289,6 +290,9 @@ type Game struct {
 	PlayTimeOut map[int64]time.Duration `json:"playTimeOut"`
 	Rules       poker.Rules             `json:"rules"`
 	Discards    model.Pokers            `json:"discards"`
+	BombCount   int                     `json:"-"`
+	ReplayCtx   *ReplayRecord           `json:"-"`
+	LastEventTs int64                   `json:"-"`
 }
 
 func (game *Game) Clean() {

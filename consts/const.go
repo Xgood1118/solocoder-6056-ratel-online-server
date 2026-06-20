@@ -79,6 +79,7 @@ const (
 	RoomPropsJokerAsTarget  = "jt"
 	RoomPropsUndercoverNum  = "ucn" // 卧底数量
 	RoomPropsBlankWordMode  = "bwm" // 空白词模式
+	RoomPropsNotify         = "notify" // 群通知开关
 )
 
 var MnemonicSorted = []int{15, 14, 2, 1, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3}

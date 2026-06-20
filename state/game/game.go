@@ -18,6 +18,25 @@ import (
 	"github.com/ratel-online/server/skill"
 )
 
+func addReplayEvent(game *database.Game, playerId int64, eventType database.ReplayEventType, data []int) {
+	if game.ReplayCtx == nil {
+		return
+	}
+	now := time.Now().UnixMilli()
+	delayMs := int64(0)
+	if game.LastEventTs > 0 {
+		delayMs = now - game.LastEventTs
+	}
+	game.LastEventTs = now
+	game.ReplayCtx.Events = append(game.ReplayCtx.Events, database.ReplayEvent{
+		Type:      eventType,
+		Timestamp: now,
+		PlayerID:  playerId,
+		Data:      data,
+		DelayMs:   delayMs,
+	})
+}
+
 type Game struct{}
 
 var (
@@ -171,6 +190,10 @@ func handleRob(player *database.Player, game *database.Game) error {
 			}
 			game.LastRob = player.ID
 			game.Multiple *= 2
+			if game.Multiple > game.ReplayCtx.MaxMultiple {
+				game.ReplayCtx.MaxMultiple = game.Multiple
+			}
+			addReplayEvent(game, player.ID, database.ReplayEventMultiple, []int{game.Multiple})
 			database.Broadcast(player.RoomID, fmt.Sprintf("%s rob\n", player.Name))
 			break
 		} else if ans == "n" {
@@ -279,6 +302,7 @@ func playing(player *database.Player, game *database.Game, master bool, playTime
 		if invalid {
 			if game.Room.EnableChat {
 				database.BroadcastChat(player, fmt.Sprintf("%s [%s] say: %s\n", player.Name, player.Role, ans))
+				addReplayEvent(game, player.ID, database.ReplayEventChat, []int{})
 				continue
 			} else {
 				_ = player.WriteString(fmt.Sprintf("%s\n", consts.ErrorsChatUnopened.Error()))
@@ -306,9 +330,20 @@ func playing(player *database.Player, game *database.Game, master bool, playTime
 		} else {
 			lastFaces = &facesArr[0]
 		}
+		sellKeys := make([]int, len(realSellKeys))
+		copy(sellKeys, realSellKeys)
 		for _, key := range realSellKeys {
 			game.Mnemonic[key]--
 		}
+		if lastFaces.Type == "bomb" || lastFaces.Type == "rocket" {
+			game.BombCount++
+			game.Multiple *= 2
+			if game.Multiple > game.ReplayCtx.MaxMultiple {
+				game.ReplayCtx.MaxMultiple = game.Multiple
+			}
+			addReplayEvent(game, player.ID, database.ReplayEventMultiple, []int{game.Multiple})
+		}
+		addReplayEvent(game, player.ID, database.ReplayEventPlay, sellKeys)
 		pokers = make(modelx.Pokers, 0)
 		for _, curr := range normalPokers {
 			pokers = append(pokers, curr...)
@@ -322,6 +357,63 @@ func playing(player *database.Player, game *database.Game, master bool, playTime
 		game.Discards = append(game.Discards, sells...)
 		if len(pokers) == 0 {
 			database.Broadcast(player.RoomID, fmt.Sprintf("%s played %s, won the game! \n", player.Name, sells.OaaString()))
+
+			game.ReplayCtx.EndTime = time.Now()
+			game.ReplayCtx.Winners = []int64{player.ID}
+
+			landlordWon := game.IsLandlord(player.ID)
+			var maxHandKeys []int
+			if lastFaces != nil {
+				maxHandKeys = lastFaces.Keys
+			}
+			maxHandInline := database.PokerKeysToInline(maxHandKeys)
+
+			for _, pid := range game.Players {
+				won := false
+				if game.Room.EnableLandlord {
+					won = (landlordWon && game.IsLandlord(pid)) || (!landlordWon && !game.IsLandlord(pid))
+				} else {
+					won = pid == player.ID
+				}
+				database.UpdateProfileStats(pid, won, game.ReplayCtx.MaxMultiple, game.Room.EnableLaiZi)
+
+				handCards := len(game.Pokers[pid])
+				if won {
+					handCards = 0
+				}
+
+				ctx := map[string]interface{}{
+					"won":         won,
+					"handCards":   handCards,
+					"isLaiZi":     game.Room.EnableLaiZi,
+					"isLandlord":  game.Room.EnableLandlord || game.Room.EnableSkill,
+					"bombCount":   game.BombCount,
+					"maxMultiple": game.ReplayCtx.MaxMultiple,
+				}
+
+				profile := database.GetProfile(pid)
+				newBadges := database.CheckAchievements(profile, ctx)
+				for _, badge := range newBadges {
+					database.Broadcast(player.RoomID, fmt.Sprintf("🎉 %s 解锁成就【%s】- %s\n", database.GetPlayer(pid).Name, badge.Name, badge.Description))
+				}
+			}
+
+			_ = database.SaveReplay(game.ReplayCtx)
+
+			if game.Room.NotifyEnabled {
+				winnerNames := make([]string, 0)
+				for _, wid := range game.ReplayCtx.Winners {
+					winnerNames = append(winnerNames, database.GetPlayer(wid).Name)
+				}
+				resultContent := fmt.Sprintf("房间 %d - 胜者: %s, 最大倍数: %d倍", game.Room.ID, strings.Join(winnerNames, ","), game.ReplayCtx.MaxMultiple)
+				database.PushEvent(game.Room.ID, "result", resultContent)
+
+				if len(maxHandKeys) > 0 {
+					handContent := fmt.Sprintf("最大牌型: %s", maxHandInline)
+					database.PushEvent(game.Room.ID, "max_hand", handContent)
+				}
+			}
+
 			room := database.GetRoom(player.RoomID)
 			if room != nil {
 				room.Game = nil
@@ -351,8 +443,14 @@ func handlePlay(player *database.Player, game *database.Game) error {
 	database.Broadcast(player.RoomID, fmt.Sprintf("%s turn to play\n", player.Name))
 	if master && game.Room.EnableSkill {
 		sk := skill.Skills[consts.SkillID(game.Skills[player.ID])]
-		database.Broadcast(player.RoomID, fmt.Sprintf("%s \n", sk.Desc(player)))
+		skillDesc := sk.Desc(player)
+		database.Broadcast(player.RoomID, fmt.Sprintf("%s \n", skillDesc))
 		sk.Apply(player, game)
+		database.IncrementSkillUse(player.ID, game.Skills[player.ID])
+		addReplayEvent(game, player.ID, database.ReplayEventSkill, []int{game.Skills[player.ID]})
+		if game.Room.NotifyEnabled {
+			database.PushEvent(game.Room.ID, "skill", fmt.Sprintf("%s 触发技能 [%s]", player.Name, sk.Name()))
+		}
 	}
 	return playing(player, game, master, game.PlayTimes[player.ID])
 }
@@ -393,7 +491,16 @@ func InitGame(room *database.Room) (*database.Game, error) {
 		playTimeout[players[i]] = consts.PlayTimeout
 	}
 	states[players[rand.Intn(len(states))]] <- stateRob
-	return &database.Game{
+	playerHands := map[int64][]int{}
+	for _, pid := range players {
+		handKeys := make([]int, len(pokers[pid]))
+		for i, p := range pokers[pid] {
+			handKeys[i] = p.Key
+		}
+		playerHands[pid] = handKeys
+	}
+
+	game := &database.Game{
 		Room:        room,
 		States:      states,
 		Players:     players,
@@ -409,7 +516,22 @@ func InitGame(room *database.Room) (*database.Game, error) {
 		PlayTimeOut: playTimeout,
 		Rules:       rules,
 		Discards:    modelx.Pokers{},
-	}, nil
+		BombCount:   0,
+		ReplayCtx: &database.ReplayRecord{
+			RoomID:      room.ID,
+			GameType:    room.Type,
+			StartTime:   time.Now(),
+			Events:      []database.ReplayEvent{},
+			BoardCards:  []int{},
+			PlayerHands: playerHands,
+			Winners:     []int64{},
+			MaxMultiple: 1,
+			Likes:       0,
+			Comments:    []database.ReplayComment{},
+		},
+		LastEventTs: time.Now().UnixMilli(),
+	}
+	return game, nil
 }
 
 func resetGame(game *database.Game) error {

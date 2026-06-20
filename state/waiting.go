@@ -118,6 +118,12 @@ func (s *waiting) waitingForStart(player *database.Player, room *database.Room) 
 			if segments[0] == "ls" || segments[0] == "v" {
 				viewRoomPlayers(room, player)
 				continue
+			} else if segments[0] == "replay" {
+				err := handleReplayCommand(player, room)
+				if err != nil {
+					_ = player.WriteError(err)
+				}
+				continue
 			} else if segments[0] == "start" || signal == "s" {
 				if room.Creator == player.ID {
 					if room.Players <= 1 {
@@ -231,22 +237,26 @@ func viewRoomPlayers(room *database.Room, currPlayer *database.Player) {
 	switch room.Type {
 	case consts.GameTypeUno, consts.GameTypeMahjong:
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "ip:", sprintPropsState(room.EnableShowIP)))
+		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "notify:", sprintPropsState(room.NotifyEnabled)))
 	case consts.GameTypeTexas:
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "pn:", room.MaxPlayers))
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "ip:", sprintPropsState(room.EnableShowIP)))
+		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "notify:", sprintPropsState(room.NotifyEnabled)))
 	case consts.GameTypeLiar:
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "jt:", sprintPropsState(room.EnableJokerAsTarget)))
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "ip:", sprintPropsState(room.EnableShowIP)))
+		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "notify:", sprintPropsState(room.NotifyEnabled)))
 	case consts.GameTypeUndercover:
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "pn:", room.MaxPlayers))
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "ucn:", room.UndercoverNum))
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "bwm:", sprintPropsState(room.BlankWordMode)))
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "ip:", sprintPropsState(room.EnableShowIP)))
+		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "notify:", sprintPropsState(room.NotifyEnabled)))
 	default:
 		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "lz:", sprintPropsState(room.EnableLaiZi)))
 		buf.WriteString(fmt.Sprintf("%-5s%-5v, %-5s%-5v\n", "ds:", sprintPropsState(room.EnableDontShuffle), "sk:", sprintPropsState(room.EnableSkill)))
 		buf.WriteString(fmt.Sprintf("%-5s%-5v, %-5s%-5v\n", "pn:", room.MaxPlayers, "ct:", sprintPropsState(room.EnableChat)))
-		buf.WriteString(fmt.Sprintf("%-5s%-5v\n", "ip:", sprintPropsState(room.EnableShowIP)))
+		buf.WriteString(fmt.Sprintf("%-5s%-5v, %-5s%-5v\n", "ip:", sprintPropsState(room.EnableShowIP), "notify:", sprintPropsState(room.NotifyEnabled)))
 		pwd := room.Password
 		if pwd != "" {
 			if room.Creator != currPlayer.ID {
@@ -265,6 +275,172 @@ func sprintPropsState(on bool) string {
 		return "on"
 	}
 	return "off"
+}
+
+func handleReplayCommand(player *database.Player, room *database.Room) error {
+	replays := database.GetRoomReplays(room.ID, 10)
+	if len(replays) == 0 {
+		return player.WriteString("暂无回放记录\n")
+	}
+
+	buf := bytes.Buffer{}
+	buf.WriteString("最近 10 局回放列表:\n")
+	for i, r := range replays {
+		winnerNames := make([]string, 0)
+		for _, wid := range r.Winners {
+			if p := database.GetPlayer(wid); p != nil {
+				winnerNames = append(winnerNames, p.Name)
+			}
+		}
+		gameType := consts.GameTypes[r.GameType]
+		if gameType == "" {
+			gameType = "未知"
+		}
+		buf.WriteString(fmt.Sprintf("%d. [%s] %s 胜者: %s, 点赞: %d\n",
+			i+1, r.StartTime.Format("01-02 15:04"), gameType,
+			strings.Join(winnerNames, ","), r.Likes))
+		if len(r.Comments) > 0 {
+			for j, c := range r.Comments {
+				if j >= 3 {
+					break
+				}
+				commenter := database.GetPlayer(c.PlayerID)
+				name := "匿名"
+				if commenter != nil {
+					name = commenter.Name
+				}
+				buf.WriteString(fmt.Sprintf("   %s: %s\n", name, c.Content))
+			}
+		}
+	}
+	buf.WriteString("请输入回放编号查看 (1-10)，输入 0 退出:\n")
+	err := player.WriteString(buf.String())
+	if err != nil {
+		return err
+	}
+
+	selected, err := player.AskForInt()
+	if err != nil {
+		return err
+	}
+	if selected == 0 {
+		return nil
+	}
+	if selected < 1 || selected > len(replays) {
+		return consts.ErrorsInputInvalid
+	}
+
+	replay := replays[selected-1]
+	return playReplay(player, replay)
+}
+
+func playReplay(player *database.Player, replay *database.ReplayRecord) error {
+	buf := bytes.Buffer{}
+	buf.WriteString(fmt.Sprintf("===== 回放开始 #%d =====\n", replay.ID))
+	buf.WriteString(fmt.Sprintf("游戏类型: %s\n", consts.GameTypes[replay.GameType]))
+	winnerNames := make([]string, 0)
+	for _, wid := range replay.Winners {
+		if p := database.GetPlayer(wid); p != nil {
+			winnerNames = append(winnerNames, p.Name)
+		}
+	}
+	buf.WriteString(fmt.Sprintf("胜者: %s\n", strings.Join(winnerNames, ",")))
+	buf.WriteString(fmt.Sprintf("公共牌: %s\n", database.PokerKeysToInline(replay.BoardCards)))
+	buf.WriteString("======================\n")
+	err := player.WriteString(buf.String())
+	if err != nil {
+		return err
+	}
+
+	for _, ev := range replay.Events {
+		if ev.DelayMs > 0 {
+			simulateTimeout(player, ev.DelayMs)
+		}
+
+		p := database.GetPlayer(ev.PlayerID)
+		pName := "系统"
+		if p != nil {
+			pName = p.Name
+		}
+
+		switch ev.Type {
+		case database.ReplayEventPlay:
+			if len(ev.Data) >= 2 && ev.Data[0] >= 1 && ev.Data[0] <= 5 {
+				action := ""
+				amount := 0
+				if len(ev.Data) >= 2 {
+					amount = ev.Data[1]
+				}
+				switch ev.Data[0] {
+				case 1:
+					action = fmt.Sprintf("call %d", amount)
+				case 2:
+					action = fmt.Sprintf("raise %d", amount)
+				case 3:
+					action = "fold"
+				case 4:
+					action = "check"
+				case 5:
+					action = fmt.Sprintf("allin %d", amount)
+				}
+				_ = player.WriteString(fmt.Sprintf(">> %s: %s\n", pName, action))
+			} else {
+				_ = player.WriteString(fmt.Sprintf(">> %s 出牌: %s\n", pName, database.PokerKeysToInline(ev.Data)))
+			}
+		case database.ReplayEventSkill:
+			_ = player.WriteString(fmt.Sprintf(">> %s 触发技能\n", pName))
+		case database.ReplayEventMultiple:
+			if replay.GameType == consts.GameTypeTexas {
+				stage := ""
+				if len(ev.Data) > 0 {
+					switch ev.Data[0] {
+					case 1:
+						stage = "Flop"
+					case 2:
+						stage = "Turn"
+					case 3:
+						stage = "River"
+					}
+				}
+				_ = player.WriteString(fmt.Sprintf(">> %s 公共牌: %s\n", stage, database.PokerKeysToInline(replay.BoardCards)))
+			} else {
+				if len(ev.Data) > 0 {
+					_ = player.WriteString(fmt.Sprintf(">> 倍数变为 %d 倍\n", ev.Data[0]))
+				}
+			}
+		case database.ReplayEventChat:
+			_ = player.WriteString(fmt.Sprintf(">> [聊天] %s 发送了消息\n", pName))
+		}
+	}
+
+	_ = player.WriteString("===== 回放结束 =====\n")
+
+	_ = player.WriteString("是否点赞此回放？(y/n): ")
+	ans, err := player.AskForString()
+	if err == nil && strings.ToLower(ans) == "y" {
+		database.AddReplayLike(replay.ID, player.ID)
+		_ = player.WriteString("点赞成功！\n")
+	}
+
+	_ = player.WriteString("是否添加短评？(输入内容，20字以内，直接回车跳过): ")
+	comment, err := player.AskForString()
+	if err == nil && strings.TrimSpace(comment) != "" {
+		database.AddReplayComment(replay.ID, player.ID, comment)
+		_ = player.WriteString("短评已添加！\n")
+	}
+
+	return nil
+}
+
+func simulateTimeout(player *database.Player, delayMs int64) {
+	if delayMs > 3000 {
+		delayMs = 3000
+	}
+	if delayMs < 500 {
+		return
+	}
+	_ = player.WriteString(fmt.Sprintf("... 等待 %dms ...\n", delayMs))
+	time.Sleep(time.Duration(delayMs) * time.Millisecond)
 }
 
 func maskIP(ip string) string {

@@ -17,6 +17,10 @@ type Texas struct {
 	Round        string         `json:"round"`
 	Folded       int            `json:"folded"`
 	AllIn        int            `json:"allIn"`
+	MaxHandType  string         `json:"-"`
+	MaxHandScore int            `json:"-"`
+	ReplayCtx    *ReplayRecord  `json:"-"`
+	LastEventTs  int64          `json:"-"`
 }
 
 func (g *Texas) Clean() {
