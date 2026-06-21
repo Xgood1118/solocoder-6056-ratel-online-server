@@ -11,6 +11,7 @@ import (
 	"github.com/ratel-online/server/rule"
 
 	"github.com/ratel-online/core/log"
+	coreconsts "github.com/ratel-online/core/consts"
 	modelx "github.com/ratel-online/core/model"
 	"github.com/ratel-online/core/util/poker"
 	"github.com/ratel-online/server/consts"
@@ -335,7 +336,7 @@ func playing(player *database.Player, game *database.Game, master bool, playTime
 		for _, key := range realSellKeys {
 			game.Mnemonic[key]--
 		}
-		if lastFaces.Type == "bomb" || lastFaces.Type == "rocket" {
+		if lastFaces.Type == coreconsts.FacesBomb {
 			game.BombCount++
 			game.Multiple *= 2
 			if game.Multiple > game.ReplayCtx.MaxMultiple {

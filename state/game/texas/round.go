@@ -157,7 +157,7 @@ func settlementRound(game *database.Texas) error {
 				(maxFaces.Type == faces.Type && maxFaces.Score < faces.Score) {
 				maxFaces = faces
 				maxPlayers = []int64{player.ID}
-				maxHandType = faces.Type
+				maxHandType = faces.Type.String()
 				handKeys := make([]int, len(player.Hand))
 				for i, c := range player.Hand {
 					handKeys[i] = c.Key
